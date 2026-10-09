@@ -1,94 +1,59 @@
-import argparse
-from datetime import datetime
+import csv
 import os
+from datetime import datetime
 
-DATA_DIR = os.path.abspath("../data")
+# calculates the monthly average response time (in hours) for every zip code
+# and for all zip codes combined, in a single pass over the filtered dataset.
+#
+# output csv has form (zip,month,avg_response_time), where zip is "all" for
+# the combined average. months with no incidents are left out.
 
-# calculates the monthly average response time 
-p = argparse.ArgumentParser()
-p.add_argument("--zip", type=int, help="Optional: zip code to filter by")
-args = p.parse_args()
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
+DATE_FORMAT = "%m/%d/%Y %I:%M:%S %p"
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# check if given a valid zip code
-if args.zip and (args.zip < 10000) and (args.zip > 99999):
-    print("Error: Given zip code must be in [10000, 99999]")
+# zip -> list of 12 monthly sums of response times (hours)
+hour_log = {"all": [0.0] * 12}
+# zip -> list of 12 monthly incident counts
+count_log = {"all": [0] * 12}
 
-else:
-    # counts the number of incidents opened in each month
-    count_log = {"Jan":0,
-                 "Feb":0,
-                 "Mar":0,
-                 "Apr":0,
-                 "May":0,
-                 "Jun":0,
-                 "Jul":0,
-                 "Aug":0,
-                 "Sep":0,
-                 "Oct":0,
-                 "Nov":0,
-                 "Dec":0}
+# use filtered dataset from data_collection.py
+dataset_path = os.path.join(DATA_DIR, "311_filtered.csv")
 
-    # monthly sum of reponse times from incidents opened in each month
-    hour_log = {"Jan":0,
-                 "Feb":0,
-                 "Mar":0,
-                 "Apr":0,
-                 "May":0,
-                 "Jun":0,
-                 "Jul":0,
-                 "Aug":0,
-                 "Sep":0,
-                 "Oct":0,
-                 "Nov":0,
-                 "Dec":0}
+with open(dataset_path, "r", encoding="utf-8", newline="") as f:
+    reader = csv.reader(f)
 
-    #use filtered dataset from data_collection.py
-    dataset_path = os.path.join(DATA_DIR, "311_filtered.csv")
+    # skip header line
+    next(reader)
 
-    with open(dataset_path, "r", encoding="utf-8") as f:
-        # skip header line
-        f.readline()
+    for zipcode, start_str, end_str in reader:
+        start = datetime.strptime(start_str, DATE_FORMAT)
+        end = datetime.strptime(end_str, DATE_FORMAT)
 
-        line = f.readline()
-        
-        while line:
-            feats = line.strip().split(',')
+        # response time in hours (not rounded)
+        hours = (end - start).total_seconds() / 3600
 
-            # if given a zip code, ingore entries with mismatch zips
-            if args.zip and (int(feats[0]) != args.zip):
-                line = f.readline()
-                continue
+        # an incident belongs to the month it was closed in
+        month = end.month - 1
 
-            # calculate response time in hours
-            start = datetime.strptime(feats[1], "%m/%d/%Y %I:%M:%S %p")
-            end = datetime.strptime(feats[2], "%m/%d/%Y %I:%M:%S %p")
+        if zipcode not in hour_log:
+            hour_log[zipcode] = [0.0] * 12
+            count_log[zipcode] = [0] * 12
 
-            res_time = end - start
-            hours = res_time.total_seconds() // 3600
+        for key in (zipcode, "all"):
+            hour_log[key][month] += hours
+            count_log[key][month] += 1
 
-            # add info to the logs
-            month = start.strftime("%b")
-            hour_log[month] += hours
-            count_log[month] += 1
+output_path = os.path.join(DATA_DIR, "monthly_avg_response.csv")
 
-            line = f.readline()
+with open(output_path, "w", encoding="utf-8", newline="") as f:
+    writer = csv.writer(f, lineterminator="\n")
+    writer.writerow(["zip", "month", "avg_response_time"])
 
-    # calculate average response time by month and output to a file
-    if args.zip:
-        # change path to put in a directory (ReponseData)
-        output = os.path.join(DATA_DIR, f"{args.zip}_mon_avg_reponse.csv")
-    else:
-        output = os.path.join(DATA_DIR, "all_mon_avg_reponse.csv")
+    for key in sorted(hour_log):
+        for m in range(12):
+            # avoid dividing by 0: skip months with no incidents
+            if count_log[key][m]:
+                writer.writerow([key, MONTHS[m], hour_log[key][m] / count_log[key][m]])
 
-    with open(output, "w") as f:
-        f.write("month,avg_reponse_time\n")
-
-        for key in count_log:
-            if count_log[key]:
-                avg = hour_log[key] / count_log[key]
-                f.write(f"{key},{avg}\n")
-
-            else: # avoid dividing by 0
-                f.write("0,0\n")
-    print("///Finished Calculation///")
-
+print("///Finished Calculation///")
